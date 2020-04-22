@@ -1,0 +1,15 @@
+CFLAGS=-O3 -Wall -Wextra -lX11 -lpci
+PREFIX=$(HOME)/.local
+
+all: paleofetch
+
+clean:
+	rm -f fetch
+
+paleofetch: paleofetch.c
+	$(CC) paleofetch.c -o paleofetch $(CFLAGS)
+	strip paleofetch
+
+install: paleofetch
+	mkdir -p $(PREFIX)/bin
+	install ./paleofetch $(PREFIX)/bin/paleofetch
