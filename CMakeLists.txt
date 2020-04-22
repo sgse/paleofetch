@@ -21,23 +21,27 @@ add_subdirectory(src)
 
 # Libraries
 pkg_check_modules(X11 REQUIRED x11)
+pkg_check_modules(LIBPCI REQUIRED libpci)
 
 # Header path
 target_include_directories(${PROJECT_NAME}
 	PUBLIC
 		${X11_INCLUDE_DIRS}
+		${LIBPCI_INCLUDE_DIRS}
 )
 
 # Linking
 target_link_libraries(${PROJECT_NAME}
 	PUBLIC
 		${X11_LIBRARIES}
+		${LIBPCI_LIBRARIES}
 )
 
 # Other flags
 target_compile_definitions(${PROJECT_NAME}
 	PUBLIC
 		${X11_CFLAGS_OTHER}
+		${LIBPCI_CFLAGS_OTHER}
 )
 
 # Default flags
