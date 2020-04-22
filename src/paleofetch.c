@@ -9,6 +9,7 @@
 #include <pci/pci.h>
 
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>
 
 #define DISTRO "Arch"
 #define BUF_SIZE 150
@@ -37,6 +38,7 @@
 
 // TODO: Finish it
 
+Display *display;
 struct utsname uname_info;
 struct sysinfo my_sysinfo;
 int title_length;
@@ -223,16 +225,10 @@ char *get_shell() {
 }
 
 char *get_resolution() {
-    Display *display = XOpenDisplay(NULL);
-    if(display == NULL) {
-        status = -1;
-        halt_and_catch_fire("XOpenDisplay failed");
-    }
     int screen = DefaultScreen(display);
 
     int width = DisplayWidth(display, screen);
     int height = DisplayHeight(display, screen);
-    XCloseDisplay(display);
 
     char *resolution = malloc(BUF_SIZE);
     snprintf(resolution, BUF_SIZE, "%dx%d", width, height);
@@ -241,8 +237,27 @@ char *get_resolution() {
 }
 
 char *get_terminal() {
+    unsigned char *prop;
+    unsigned long _, // not unused, but we don't need the results
+                  window = RootWindow(display, XDefaultScreen(display));
+    Atom a,
+         active = XInternAtom(display, "_NET_ACTIVE_WINDOW", True),
+         class = XInternAtom(display, "WM_CLASS", True);
+
+#define GetProp(property) \
+    XGetWindowProperty(display, window, property, 0, 64, 0, 0, &a, (int *)&_, &_, &_, &prop);
+
+    GetProp(active);
+    window = (prop[3] << 24) + (prop[2] << 16) + (prop[1] << 8) + prop[0];
+    free(prop);
+    GetProp(class);
+
+#undef GetProp
+
     char *terminal = malloc(BUF_SIZE);
-    strncpy(terminal, getenv("TERM"), BUF_SIZE);
+    snprintf(terminal, BUF_SIZE, "%s", prop);
+    free(prop);
+
     return terminal;
 }
 
@@ -391,6 +406,11 @@ int main(int argc, char *argv[]) {
     halt_and_catch_fire("uname failed");
     status = sysinfo(&my_sysinfo);
     halt_and_catch_fire("sysinfo failed");
+    display = XOpenDisplay(NULL);
+    if(display == NULL) {
+        status = -1;
+        halt_and_catch_fire("XOpenDisplay failed");
+    }
 
     cache = get_cache_file();
     if(argc == 2 && strcmp(argv[1], "--recache") == 0)
@@ -454,5 +474,6 @@ int main(int argc, char *argv[]) {
     free(colors1);
     free(colors2);
 
+    XCloseDisplay(display);
     free(cache);
 }
