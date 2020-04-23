@@ -16,6 +16,12 @@ include(FindPkgConfig)
 # The program itself
 add_executable(${PROJECT_NAME})
 
+# Include directory
+target_include_directories(${PROJECT_NAME}
+	PUBLIC
+	${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # Sources list
 add_subdirectory(src)
 
@@ -46,7 +52,7 @@ target_compile_definitions(${PROJECT_NAME}
 
 # Default flags
 if(NOT DEFINED ENV{CFLAGS})
-	set(CMAKE_CXX_FLAGS "-Wall -Wextra -g")
+	set(CMAKE_C_FLAGS "-Wall -Wextra -g")
 endif()
 
 
