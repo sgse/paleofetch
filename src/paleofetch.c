@@ -30,7 +30,7 @@ int status;
 
 void halt_and_catch_fire(const char *message) {
     if(status != 0) {
-        printf("%s\n", message);
+        printf("paleofetch: %s\n", message);
         exit(status);
     }
 }
@@ -62,47 +62,18 @@ void truncate_spaces(char *str) {
 }
 
 /*
- * Returns index of substring in str, if it is there
- * Assumes that strlen(substring) >= len
- */
-int contains_substring(const char *str, const char*substring, size_t len) {
-    if(len == 0) return -1;
-
-    /* search for substring */
-    int offset = 0;
-    for(;;) {
-        int match = 1;
-        for(size_t i = 0; i < len; i++) {
-            if(*(str+offset+i) == '\0') return -1;
-            else if(*(str+offset+i) != *(substring+i)) {
-                match = 0;
-                break;
-            }
-        }
-
-        if(match) break;
-        offset++;
-    }
-
-    return offset;
-}
-
-/*
  * Removes the first len characters of substring from str
  * Assumes that strlen(substring) >= len
  * Returns index where substring was found, or -1 if substring isn't found
  */
 void remove_substring(char *str, const char* substring, size_t len) {
     /* shift over the rest of the string to remove substring */
-    int offset = contains_substring(str, substring, len);
-    if(offset < 0) return;
+    char *sub = strstr(str, substring);
+    if(sub == NULL) return;
 
     int i = 0;
-    for(;;) {
-        if(*(str+offset+i) == '\0') break;
-        *(str+offset+i) = *(str+offset+i+len);
-        i++;
-    }
+    do *(sub+i) = *(sub+i+len);
+    while(*(sub+(++i)) != '\0');
 }
 
 char *get_title() {
@@ -132,8 +103,25 @@ char *get_bar() {
 }
 
 char *get_os() {
-    char *os = malloc(BUF_SIZE);
-    snprintf(os, BUF_SIZE, "%s %s %s", DISTRO, uname_info.sysname, uname_info.machine);
+    char *os = malloc(BUF_SIZE),
+         *name = malloc(BUF_SIZE),
+         *line = NULL;
+    size_t len;
+    FILE *os_release = fopen("/etc/os-release", "r");
+    if(os_release == NULL) {
+        status = -1;
+        halt_and_catch_fire("unable to open /etc/os-release");
+    }
+
+    while (getline(&line, &len, os_release) != -1) {
+        if (sscanf(line, "NAME=\"%[^\"]+", name) > 0) break;
+    }
+
+    free(line);
+    fclose(os_release);
+    snprintf(os, BUF_SIZE, "%s %s", name, uname_info.machine);
+    free(name);
+
     return os;
 }
 
@@ -178,19 +166,23 @@ char *get_host() {
 
 char *get_uptime() {
     long seconds = my_sysinfo.uptime;
-    long hours = seconds / 3600;
-    long minutes = (seconds / 60) % 60;
-    seconds = seconds % 60;
+    struct { char *name; int secs; } units[] = {
+        { "day",  60 * 60 * 24 },
+        { "hour", 60 * 60 },
+        { "min",  60 },
+    };
 
+    int n, len = 0;
     char *uptime = malloc(BUF_SIZE);
+    for (int i = 0; i < 3; ++i ) {
+        if ((n = seconds / units[i].secs) || i == 2) /* always print minutes */
+            len += snprintf(uptime + len, BUF_SIZE - len, 
+                            "%d %s%s, ", n, units[i].name, n != 1 ? "s": "");
+        seconds %= units[i].secs;
+    }
 
-    if(hours > 0)
-        snprintf(uptime, BUF_SIZE, "%ld hours, %ld mins", hours, minutes);
-    else if(minutes > 0)
-        snprintf(uptime, BUF_SIZE, "%ld mins", minutes);
-    else
-        snprintf(uptime, BUF_SIZE, "%ld secs", seconds);
-
+    // null-terminate at the trailing comma
+    uptime[len - 2] = '\0';
     return uptime;
 }
 
@@ -224,43 +216,101 @@ char *get_packages() {
 
 char *get_shell() {
     char *shell = malloc(BUF_SIZE);
-    strncpy(shell, strrchr(getenv("SHELL"), '/') + 1, BUF_SIZE);
+    char *shell_path = getenv("SHELL");
+    char *shell_name = strrchr(getenv("SHELL"), '/');
+
+    if(shell_name == NULL) /* if $SHELL doesn't have a '/' */
+        strncpy(shell, shell_path, BUF_SIZE); /* copy the whole thing over */
+    else
+        strncpy(shell, shell_name + 1, BUF_SIZE); /* o/w copy past the last '/' */
+
     return shell;
 }
 
 char *get_resolution() {
-    int screen = DefaultScreen(display);
-
-    int width = DisplayWidth(display, screen);
-    int height = DisplayHeight(display, screen);
-
+    int screen, width, height;
     char *resolution = malloc(BUF_SIZE);
-    snprintf(resolution, BUF_SIZE, "%dx%d", width, height);
+    
+    if (display != NULL) {
+        screen = DefaultScreen(display);
+    
+        width = DisplayWidth(display, screen);
+        height = DisplayHeight(display, screen);
+
+        snprintf(resolution, BUF_SIZE, "%dx%d", width, height);
+    } else {
+        DIR *dir;
+        struct dirent *entry;
+        char dir_name[] = "/sys/class/drm";
+        char modes_file_name[BUF_SIZE * 2];
+        FILE *modes;
+        char *line = NULL;
+        size_t len;
+        
+        /* preload resolution with empty string, in case we cant find a resolution through parsing */
+        strncpy(resolution, "", BUF_SIZE);
+
+        dir = opendir(dir_name);
+        if (dir == NULL) {
+            status = -1;
+            halt_and_catch_fire("Could not open /sys/class/drm to determine resolution in tty mode.");
+        }
+        /* parse through all directories and look for a non empty modes file */
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_type == DT_LNK) {
+                snprintf(modes_file_name, BUF_SIZE * 2, "%s/%s/modes", dir_name, entry->d_name);
+
+                modes = fopen(modes_file_name, "r");
+                if (modes != NULL) {
+                    if (getline(&line, &len, modes) != -1) {
+                        strncpy(resolution, line, BUF_SIZE);
+                        remove_newline(resolution);
+
+                        free(line);
+                        fclose(modes);
+
+                        break;
+                    }
+
+                    fclose(modes);
+                }
+            }
+        }
+        
+        closedir(dir);
+    }
 
     return resolution;
 }
 
 char *get_terminal() {
     unsigned char *prop;
+    char *terminal = malloc(BUF_SIZE);
+
+    /* check if xserver is running or if we are running in a straight tty */
+    if (display != NULL) {   
+
     unsigned long _, // not unused, but we don't need the results
-                  window = RootWindow(display, XDefaultScreen(display));
-    Atom a,
-         active = XInternAtom(display, "_NET_ACTIVE_WINDOW", True),
-         class = XInternAtom(display, "WM_CLASS", True);
+                  window = RootWindow(display, XDefaultScreen(display));    
+        Atom a,
+             active = XInternAtom(display, "_NET_ACTIVE_WINDOW", True),
+             class = XInternAtom(display, "WM_CLASS", True);
 
 #define GetProp(property) \
-    XGetWindowProperty(display, window, property, 0, 64, 0, 0, &a, (int *)&_, &_, &_, &prop);
+        XGetWindowProperty(display, window, property, 0, 64, 0, 0, &a, (int *)&_, &_, &_, &prop);
 
-    GetProp(active);
-    window = (prop[3] << 24) + (prop[2] << 16) + (prop[1] << 8) + prop[0];
-    free(prop);
-    GetProp(class);
+        GetProp(active);
+        window = (prop[3] << 24) + (prop[2] << 16) + (prop[1] << 8) + prop[0];
+        free(prop);
+        GetProp(class);
 
 #undef GetProp
 
-    char *terminal = malloc(BUF_SIZE);
-    snprintf(terminal, BUF_SIZE, "%s", prop);
-    free(prop);
+        snprintf(terminal, BUF_SIZE, "%s", prop);
+        free(prop);
+    } else {
+        strncpy(terminal, getenv("TERM"), BUF_SIZE); /* fallback to old method */
+    }
 
     return terminal;
 }
@@ -276,6 +326,7 @@ char *get_cpu() {
     char *line = NULL;
     size_t len; /* unused */
     int num_cores = 0;
+    double freq;
 
     /* read the model name into cpu_model, and increment num_cores every time model name is found */
     while(getline(&line, &len, cpuinfo) != -1) {
@@ -284,26 +335,47 @@ char *get_cpu() {
     free(line);
     fclose(cpuinfo);
 
-    char *cpu = malloc(BUF_SIZE);
-    snprintf(cpu, BUF_SIZE, "%s(%d)", cpu_model, num_cores);
-    free(cpu_model);
+    FILE *cpufreq = fopen("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", "r");
+
+    if (cpufreq == NULL) {
+        status = -1;
+        halt_and_catch_fire("Unable to open cpufreq");
+    }
+
+    line = NULL;
+
+    if (getline(&line, &len, cpufreq) != -1) {
+        sscanf(line, "%lf", &freq);
+        freq /= 1e6; // convert kHz to GHz
+    } else {
+        freq = 0.0; // cpuinfo_max_freq not available?
+    }
+
+    free(line);
+    fclose(cpufreq);
 
     /* remove unneeded information */
-    remove_substring(cpu, "(R)", 3);
-    remove_substring(cpu, "(TM)", 4);
-    remove_substring(cpu, "Core", 4);
-    remove_substring(cpu, "CPU", 3);
-    truncate_spaces(cpu);
+    remove_substring(cpu_model, "(R)", 3);
+    remove_substring(cpu_model, "(TM)", 4);
+    remove_substring(cpu_model, "Core", 4);
+    remove_substring(cpu_model, "CPU", 3);
 
+    char *cpu = malloc(BUF_SIZE);
+    snprintf(cpu, BUF_SIZE, "%s (%d) @ %.1fGHz", cpu_model, num_cores, freq);
+    free(cpu_model);
+
+    truncate_spaces(cpu);
     return cpu;
 }
 
-char *get_gpu() {
+char *find_gpu(int index) {
     // inspired by https://github.com/pciutils/pciutils/edit/master/example.c
     /* it seems that pci_lookup_name needs to be given a buffer, but I can't for the life of my figure out what its for */
-    char buffer[BUF_SIZE], *gpu = malloc(BUF_SIZE);
+    char buffer[BUF_SIZE], *device_class, *gpu = malloc(BUF_SIZE);
     struct pci_access *pacc;
     struct pci_dev *dev;
+    int gpu_index = 0;
+    bool found = false;
 
     pacc = pci_alloc();
     pci_init(pacc);
@@ -312,19 +384,34 @@ char *get_gpu() {
 
     while(dev != NULL) {
         pci_fill_info(dev, PCI_FILL_IDENT);
-        if(strcmp("VGA compatible controller", pci_lookup_name(pacc, buffer, sizeof(buffer), PCI_LOOKUP_CLASS, dev->device_class)) == 0) {
+        device_class = pci_lookup_name(pacc, buffer, sizeof(buffer), PCI_LOOKUP_CLASS, dev->device_class);
+        if(strcmp("VGA compatible controller", device_class) == 0 || strcmp("3D controller", device_class) == 0) {
             strncpy(gpu, pci_lookup_name(pacc, buffer, sizeof(buffer), PCI_LOOKUP_DEVICE | PCI_LOOKUP_VENDOR, dev->vendor_id, dev->device_id), BUF_SIZE);
-            break;
+            if(gpu_index == index) {
+                found = true;
+                break;
+            } else {
+                gpu_index++;
+            }
         }
 
         dev = dev->next;
     }
 
-    remove_substring(gpu, "Corporation", 11);
-    truncate_spaces(gpu);
+    if (found == false) *gpu = '\0'; // empty string, so it will not be printed
 
     pci_cleanup(pacc);
+    remove_substring(gpu, "Corporation", 11);
+    truncate_spaces(gpu);
     return gpu;
+}
+
+char *get_gpu1() {
+    return find_gpu(0);
+}
+
+char *get_gpu2() {
+    return find_gpu(1);
 }
 
 char *get_memory() {
@@ -453,10 +540,6 @@ int main(int argc, char *argv[]) {
     status = sysinfo(&my_sysinfo);
     halt_and_catch_fire("sysinfo failed");
     display = XOpenDisplay(NULL);
-    if(display == NULL) {
-        status = -1;
-        halt_and_catch_fire("XOpenDisplay failed");
-    }
 
     cache = get_cache_file();
     if(argc == 2 && strcmp(argv[1], "--recache") == 0)
@@ -475,16 +558,27 @@ int main(int argc, char *argv[]) {
     }
 
 #define COUNT(x) (int)(sizeof x / sizeof *x)
+    int offset = 0;
 
     for (int i = 0; i < COUNT(LOGO); i++) {
         // If we've run out of information to show...
-        if(i >= COUNT(config)) // just print the next line of the logo
-            puts(LOGO[i]);
+        if(i >= COUNT(config) - offset) // just print the next line of the logo
+            printf(COLOR"%s\n", LOGO[i]);
         else {
             // Otherwise, we've got a bit of work to do.
-            char *label = config[i].label,
-                 *value = get_value(config[i], read_cache, cache_data);
-            printf(COLOR"%s%s\e[0m%s\n", LOGO[i], label, value);
+            char *label = config[i+offset].label,
+                 *value = get_value(config[i+offset], read_cache, cache_data);
+            if (strcmp(value, "") != 0) { // check if value is an empty string
+                printf(COLOR"%s%s\e[0m%s\n", LOGO[i], label, value); // just print if not empty
+            } else {
+                if (strcmp(label, "") != 0) { // check if label is empty, otherwise it's a spacer
+                    ++offset; // print next line of information
+                    free(value); // free memory allocated for empty value
+                    label = config[i+offset].label; // read new label and value
+                    value = get_value(config[i+offset], read_cache, cache_data);
+                }
+                printf(COLOR"%s%s\e[0m%s\n", LOGO[i], label, value);
+            }
             free(value);
 
         }
@@ -500,7 +594,9 @@ int main(int argc, char *argv[]) {
 
     free(cache);
     free(cache_data);
-    XCloseDisplay(display);
+    if(display != NULL) { 
+        XCloseDisplay(display);
+    }
 
     return 0;
 }

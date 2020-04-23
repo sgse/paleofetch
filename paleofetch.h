@@ -12,8 +12,11 @@ char *get_title(),
      *get_resolution(),
      *get_terminal(),
      *get_cpu(),
-     *get_gpu(),
+     *get_gpu1(),
+     *get_gpu2(),
      *get_memory(),
      *get_colors1(),
      *get_colors2(),
      *spacer();
+
+#define SPACER {"", spacer, false},
