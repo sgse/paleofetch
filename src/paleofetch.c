@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <dirent.h>
+#include <errno.h>
 
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
@@ -16,24 +17,34 @@
 #include "config.h"
 
 #define BUF_SIZE 150
+#define COUNT(x) (int)(sizeof x / sizeof *x)
+
+#define halt_and_catch_fire(fmt, ...) \
+    do { \
+        if(status != 0) { \
+            fprintf(stderr, "paleofetch: " fmt "\n", ##__VA_ARGS__); \
+            exit(status); \
+        } \
+    } while(0)
 
 struct conf {
     char *label, *(*function)();
     bool cached;
 } config[] = CONFIG;
 
+typedef struct {
+    char *substring;
+    size_t length;
+} STRING_REMOVE;
+
+STRING_REMOVE cpu_remove[] = CPU_REMOVE;
+STRING_REMOVE gpu_remove[] = GPU_REMOVE;
+
 Display *display;
 struct utsname uname_info;
 struct sysinfo my_sysinfo;
 int title_length;
 int status;
-
-void halt_and_catch_fire(const char *message) {
-    if(status != 0) {
-        printf("paleofetch: %s\n", message);
-        exit(status);
-    }
-}
 
 /*
  * Replaces the first newline character with null terminator
@@ -302,6 +313,7 @@ char *get_terminal() {
         GetProp(active);
         window = (prop[3] << 24) + (prop[2] << 16) + (prop[1] << 8) + prop[0];
         free(prop);
+        if(!window) goto terminal_fallback;
         GetProp(class);
 
 #undef GetProp
@@ -309,6 +321,7 @@ char *get_terminal() {
         snprintf(terminal, BUF_SIZE, "%s", prop);
         free(prop);
     } else {
+terminal_fallback:
         strncpy(terminal, getenv("TERM"), BUF_SIZE); /* fallback to old method */
     }
 
@@ -325,12 +338,12 @@ char *get_cpu() {
     char *cpu_model = malloc(BUF_SIZE / 2);
     char *line = NULL;
     size_t len; /* unused */
-    int num_cores = 0;
+    int num_cores = 0, cpu_freq, prec = 3;
     double freq;
 
     /* read the model name into cpu_model, and increment num_cores every time model name is found */
     while(getline(&line, &len, cpuinfo) != -1) {
-        num_cores += sscanf(line, "model name	: %[^@] @", cpu_model);
+        num_cores += sscanf(line, "model name	: %[^\n@]", cpu_model);
     }
     free(line);
     fclose(cpuinfo);
@@ -345,8 +358,14 @@ char *get_cpu() {
     line = NULL;
 
     if (getline(&line, &len, cpufreq) != -1) {
-        sscanf(line, "%lf", &freq);
-        freq /= 1e6; // convert kHz to GHz
+        sscanf(line, "%d", &cpu_freq);
+        cpu_freq /= 1000; // convert kHz to MHz
+        freq = cpu_freq / 1000.0; // convert MHz to GHz and cast to double
+        while (cpu_freq % 10 == 0) {
+            --prec;
+            cpu_freq /= 10;
+        }
+        if (prec == 0) prec = 1; // we don't want zero decimal places 
     } else {
         freq = 0.0; // cpuinfo_max_freq not available?
     }
@@ -355,13 +374,12 @@ char *get_cpu() {
     fclose(cpufreq);
 
     /* remove unneeded information */
-    remove_substring(cpu_model, "(R)", 3);
-    remove_substring(cpu_model, "(TM)", 4);
-    remove_substring(cpu_model, "Core", 4);
-    remove_substring(cpu_model, "CPU", 3);
+    for (int i = 0; i < COUNT(cpu_remove); ++i) {
+        remove_substring(cpu_model, cpu_remove[i].substring, cpu_remove[i].length);
+    }
 
     char *cpu = malloc(BUF_SIZE);
-    snprintf(cpu, BUF_SIZE, "%s (%d) @ %.1fGHz", cpu_model, num_cores, freq);
+    snprintf(cpu, BUF_SIZE, "%s (%d) @ %.*fGHz", cpu_model, num_cores, prec, freq);
     free(cpu_model);
 
     truncate_spaces(cpu);
@@ -401,8 +419,14 @@ char *find_gpu(int index) {
     if (found == false) *gpu = '\0'; // empty string, so it will not be printed
 
     pci_cleanup(pacc);
-    remove_substring(gpu, "Corporation", 11);
+
+    /* remove unneeded information */
+    for (int i = 0; i < COUNT(gpu_remove); ++i) {
+        remove_substring(gpu, gpu_remove[i].substring, gpu_remove[i].length);
+    }
+
     truncate_spaces(gpu);
+
     return gpu;
 }
 
@@ -500,9 +524,13 @@ char *get_cache_file() {
  * we might get in trouble would be if the user decided not to have any
  * sort of sigil (like ':') after their labels. */
 char *search_cache(char *cache_data, char *label) {
-    char *start = strstr(cache_data, label) + strlen(label);
+    char *start = strstr(cache_data, label);
+    if(start == NULL) {
+        status = ENODATA;
+        halt_and_catch_fire("cache miss on key '%s'; need to --recache?", label);
+    }
+    start += strlen(label);
     char *end = strchr(start, ';');
-
     char *buf = calloc(1, BUF_SIZE);
     // skip past the '=' and stop just before the ';'
     strncpy(buf, start + 1, end - start - 1);
@@ -557,7 +585,6 @@ int main(int argc, char *argv[]) {
         fclose(cache_file); // We just need the first (and only) line.
     }
 
-#define COUNT(x) (int)(sizeof x / sizeof *x)
     int offset = 0;
 
     for (int i = 0; i < COUNT(LOGO); i++) {
