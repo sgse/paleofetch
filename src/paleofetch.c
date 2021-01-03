@@ -177,38 +177,6 @@ static char *get_kernel() {
     return kernel;
 }
 
-static char *get_host() {
-    char *host = malloc(BUF_SIZE), buffer[BUF_SIZE/2];
-    FILE *product_name, *product_version, *model;
-
-    if((product_name = fopen("/sys/devices/virtual/dmi/id/product_name", "r")) != NULL) {
-        if((product_version = fopen("/sys/devices/virtual/dmi/id/product_version", "r")) != NULL) {
-            fread(host, 1, BUF_SIZE/2, product_name);
-            remove_newline(host);
-            strcat(host, " ");
-            fread(buffer, 1, BUF_SIZE/2, product_version);
-            remove_newline(buffer);
-            strcat(host, buffer);
-            fclose(product_version);
-        } else {
-            fclose(product_name);
-            goto model_fallback;
-        }
-        fclose(product_name);
-        return host;
-    }
-
-model_fallback:
-    if((model = fopen("/sys/firmware/devicetree/base/model", "r")) != NULL) {
-        fread(host, 1, BUF_SIZE, model);
-        remove_newline(host);
-        return host;
-    }
-
-    status = -1;
-    halt_and_catch_fire("unable to get host");
-    return NULL;
-}
 
 static char *get_uptime() {
     long seconds = my_sysinfo.uptime;
