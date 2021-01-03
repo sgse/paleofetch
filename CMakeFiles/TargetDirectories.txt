@@ -1,0 +1,13 @@
+/home/sgs/paleofetch/CMakeFiles/install/strip.dir
+/home/sgs/paleofetch/CMakeFiles/install/local.dir
+/home/sgs/paleofetch/CMakeFiles/install.dir
+/home/sgs/paleofetch/CMakeFiles/list_install_components.dir
+/home/sgs/paleofetch/CMakeFiles/rebuild_cache.dir
+/home/sgs/paleofetch/CMakeFiles/edit_cache.dir
+/home/sgs/paleofetch/CMakeFiles/paleofetch.dir
+/home/sgs/paleofetch/src/CMakeFiles/install/strip.dir
+/home/sgs/paleofetch/src/CMakeFiles/install/local.dir
+/home/sgs/paleofetch/src/CMakeFiles/install.dir
+/home/sgs/paleofetch/src/CMakeFiles/list_install_components.dir
+/home/sgs/paleofetch/src/CMakeFiles/rebuild_cache.dir
+/home/sgs/paleofetch/src/CMakeFiles/edit_cache.dir

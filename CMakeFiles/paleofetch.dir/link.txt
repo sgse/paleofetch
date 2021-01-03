@@ -1,0 +1,1 @@
+/usr/bin/cc -Wall -Wextra -g CMakeFiles/paleofetch.dir/src/paleofetch.c.o -o paleofetch  -lX11 -lpci 
